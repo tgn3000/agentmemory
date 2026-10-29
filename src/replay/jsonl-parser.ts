@@ -210,6 +210,22 @@ export function parseJsonlText(text: string, fallbackSessionId?: string): Parsed
           raw: { toolUseId: tool.id, entry },
         });
       }
+    } else if (entry.type === "attachment") {
+      // Claude Code stores a message typed while the agent is working as a queued_command
+      // attachment; background-task notices share that type under another commandMode.
+      const attachment = entry.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown } | undefined;
+      const typed = attachment?.type === "queued_command" && (attachment.commandMode ?? "prompt") === "prompt";
+      const text = typed ? toText(attachment.prompt) : "";
+      if (text.trim().length > 0) {
+        observations.push({
+          id: nextId(),
+          sessionId: sessionId || "imported",
+          timestamp: ts,
+          hookType: "prompt_submit" as HookType,
+          userPrompt: text,
+          raw: entry,
+        });
+      }
     } else if (entry.type === "summary" || entry.type === "system") {
       // ignore meta entries
     }

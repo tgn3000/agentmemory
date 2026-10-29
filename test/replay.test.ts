@@ -193,6 +193,23 @@ describe("parseJsonlText metadata lines and re-import", () => {
     expect(new Set([...ids(a), ...ids(b)]).size).toBe(4);
   });
 
+  it("imports messages typed while the agent was working, not task notifications", () => {
+    const queued = (uuid: string, commandMode: string | undefined, text: string) => JSON.stringify({
+      type: "attachment", uuid, sessionId: "s1", timestamp: "2026-10-30T01:00:00Z",
+      attachment: { type: "queued_command", ...(commandMode ? { commandMode } : {}), prompt: [{ type: "text", text }] },
+    });
+    const out = parseJsonlText([
+      queued("q1", "prompt", "skip the GPU tests"),
+      queued("q2", "task-notification", "<task-notification><task-id>b1</task-id>"),
+      queued("q3", undefined, "use the release branch"),
+      JSON.stringify({ type: "attachment", uuid: "d1", sessionId: "s1", attachment: { type: "date", date: "x" } }),
+    ].join("\n"));
+    expect(out.observations.map((o) => [o.hookType, o.userPrompt])).toEqual([
+      ["prompt_submit", "skip the GPU tests"],
+      ["prompt_submit", "use the release branch"],
+    ]);
+  });
+
   it("gives a timestampless entry the previous entry's time", () => {
     const out = parseJsonlText([
       JSON.stringify({ type: "user", sessionId: "s1", timestamp: "2026-10-09T09:12:38Z", message: { role: "user", content: "a" } }),
