@@ -518,8 +518,11 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
         // BM25 + vector in one path so jsonl-imported observations are
         // reachable by semantic search, not just keyword.
         try {
-          // A failed embed keeps the previous vector; drop it first so a stale one is retried, not kept.
-          for (const obs of committed.changed) getVectorIndex()?.remove(obs.id);
+          // A failed re-index would keep the old entries; drop them first so a stale one is retried, not kept.
+          for (const obs of committed.changed) {
+            getSearchIndex().remove(obs.id);
+            getVectorIndex()?.remove(obs.id);
+          }
           await indexRecords(committed.toIndex, []);
         } catch (err) {
           logger.warn("Import indexing failed; restart rebuild will recover", {
