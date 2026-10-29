@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerCompressFunction, COMPRESSION_TIMEOUT_MS } from "../src/functions/compress.js";
+import { registerCompressFunction, COMPRESSION_TIMEOUT_MS, compressionTimeoutMs } from "../src/functions/compress.js";
 import { registerObserveFunction } from "../src/functions/observe.js";
 import { registerCompressionApi } from "../src/triggers/compression.js";
 import { registerApiTriggers } from "../src/triggers/api.js";
@@ -364,6 +364,22 @@ describe("compression recovery", () => {
     expect(compression).toMatchObject({ status: "failed", attempts: 1 });
     expect(retained).toEqual(raw());
   });
+
+  it("gives a slow model the time AGENTMEMORY_LLM_TIMEOUT_MS allows", async () => {
+    vi.useFakeTimers(); vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", "120000");
+    const provider = { name: "test", compress: vi.fn(() => new Promise<string>((resolve) => setTimeout(() => resolve(xml), 90_000))), summarize: vi.fn() };
+    const r = rig(provider); await r.seed();
+    const task = r.call("mem::compression-retry", { sessionId: "session-recovery" });
+    await vi.advanceTimersByTimeAsync(90_001);
+    expect(await task).toMatchObject({ success: true, recovered: 1 });
+    expect(await r.kv.get(KV.observations("session-recovery"), raw().id)).toMatchObject({ compression: { status: "complete" } });
+  });
+
+  it.each([[undefined, 60_000], ["30000", 60_000], ["120000", 120_000], ["900000", 170_000], ["2m", 60_000]])(
+    "bounds the compression deadline for AGENTMEMORY_LLM_TIMEOUT_MS=%s", (value, expected) => {
+      vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", value ?? "");
+      expect(compressionTimeoutMs()).toBe(expected);
+    });
 
   it("stops starting work after the batch budget while allowing its current attempt to finish", async () => {
     vi.useFakeTimers();

@@ -22,8 +22,18 @@ import { withKeyedLock } from "../state/keyed-mutex.js";
 import { scrubRecord, stripPrivateData } from "./privacy.js";
 import { compressionRaw, needsCompression, observationRevision, pendingCompression, type StoredObservation } from "./compression-state.js";
 import { registerCompressionRecovery } from "./compression-recovery.js";
+import { getEnvVar } from "../config.js";
+import { HARD_BUDGET_CAP_MS } from "../providers/_fetch.js";
 
 export const COMPRESSION_TIMEOUT_MS = 60_000;
+
+// The model call already honours AGENTMEMORY_LLM_TIMEOUT_MS; a fixed deadline here would cut a
+// slower (local) model off first. Never shorter than before, and under the iii invocation timeout.
+export function compressionTimeoutMs(): number {
+  const raw = getEnvVar("AGENTMEMORY_LLM_TIMEOUT_MS")?.trim();
+  const configured = raw && /^\d+$/.test(raw) ? Number(raw) : 0;
+  return Math.min(Math.max(configured, COMPRESSION_TIMEOUT_MS), HARD_BUDGET_CAP_MS);
+}
 
 type CompressRequest = { observationId: string; sessionId: string; raw?: RawObservation; expectedRevision?: string; scope?: { project?: string; agentId?: string } };
 export type CompressResult = {
@@ -265,7 +275,7 @@ export function registerCompressFunction(
     if (data.raw !== undefined && (!data.raw || typeof data.raw.hookType !== "string" || !data.raw.hookType)) {
       return Promise.resolve({ success: false, error: "invalid_raw_observation" });
     }
-    return dispatch(data, Date.now() + COMPRESSION_TIMEOUT_MS);
+    return dispatch(data, Date.now() + compressionTimeoutMs());
   });
   registerCompressionRecovery(sdk, kv);
 }
