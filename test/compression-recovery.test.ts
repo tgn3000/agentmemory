@@ -366,7 +366,7 @@ describe("compression recovery", () => {
   });
 
   it("gives a slow model the time AGENTMEMORY_LLM_TIMEOUT_MS allows", async () => {
-    vi.useFakeTimers(); vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", "120000");
+    vi.useFakeTimers(); vi.stubEnv("OPENAI_TIMEOUT_MS", ""); vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", "120000");
     const provider = { name: "test", compress: vi.fn(() => new Promise<string>((resolve) => setTimeout(() => resolve(xml), 90_000))), summarize: vi.fn() };
     const r = rig(provider); await r.seed();
     const task = r.call("mem::compression-retry", { sessionId: "session-recovery" });
@@ -382,11 +382,11 @@ describe("compression recovery", () => {
       expect(compressionTimeoutMs()).toBe(expected);
     });
 
-  it("lets OPENAI_TIMEOUT_MS take precedence, as it does for the OpenAI provider", () => {
+  it("uses the larger of OPENAI_TIMEOUT_MS and AGENTMEMORY_LLM_TIMEOUT_MS", () => {
     vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", "90000");
     vi.stubEnv("OPENAI_TIMEOUT_MS", "120000");
     expect(compressionTimeoutMs()).toBe(120_000);
-    vi.stubEnv("OPENAI_TIMEOUT_MS", "0");
+    vi.stubEnv("OPENAI_TIMEOUT_MS", "60000");
     expect(compressionTimeoutMs()).toBe(90_000);
   });
 
