@@ -22,7 +22,7 @@ import { resetLessonIndex } from "./lessons.js";
 import { projectTimeline, type Timeline } from "../replay/timeline.js";
 import { safeAudit } from "./audit.js";
 import { buildSyntheticCompression } from "./compress-synthetic.js";
-import { getSearchIndex, getVectorIndex, indexRecords } from "./search.js";
+import { flushIndexSave, getSearchIndex, getVectorIndex, indexRecords } from "./search.js";
 import { logger } from "../logger.js";
 import { rawFromObservationSource } from "./observation-source.js";
 import { budgetImportedObservationSources } from "./observation-source-budget.js";
@@ -490,6 +490,15 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
           const stored = new Map(existingRows.map((row) => [row.id, row]));
           const toIndex = planned.observations.filter((obs) => !alreadyIndexed(obs, stored.get(obs.id)));
           const changed = toIndex.filter((obs) => stored.has(obs.id) && indexedContent(stored.get(obs.id)!) !== indexedContent(obs));
+          // Drop changed rows' old entries durably before overwriting the rows: after a failed
+          // re-index or a crash they are then missing (rebuilt at startup), never stale.
+          if (changed.length > 0) {
+            for (const obs of changed) {
+              getSearchIndex().remove(obs.id);
+              getVectorIndex()?.remove(obs.id);
+            }
+            await flushIndexSave();
+          }
           const added = planned.observations.filter((obs) => !knownIds.has(obs.id)).length;
           sessionRow.observationCount = (sessionRow.observationCount || 0) + added;
           if (parsed.endedAt > (sessionRow.endedAt || "")) sessionRow.endedAt = parsed.endedAt;
@@ -503,7 +512,7 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
             const failure = results.find((result) => result.status === "rejected");
             if (failure) throw failure.reason;
           }
-          return { ...planned, sessionRow, added, toIndex, changed };
+          return { ...planned, sessionRow, added, toIndex };
         });
         if (!committed.success) return { ...committed, imported: sessionIds.length, sessionIds, observations: observationCount };
         const { sessionRow, observations: compressed } = committed;
@@ -518,11 +527,6 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
         // BM25 + vector in one path so jsonl-imported observations are
         // reachable by semantic search, not just keyword.
         try {
-          // A failed re-index would keep the old entries; drop them first so a stale one is retried, not kept.
-          for (const obs of committed.changed) {
-            getSearchIndex().remove(obs.id);
-            getVectorIndex()?.remove(obs.id);
-          }
           await indexRecords(committed.toIndex, []);
         } catch (err) {
           logger.warn("Import indexing failed; restart rebuild will recover", {
