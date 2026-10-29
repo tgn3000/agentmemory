@@ -489,6 +489,7 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
           const knownIds = new Set(existingRows.map((row) => row.id));
           const stored = new Map(existingRows.map((row) => [row.id, row]));
           const toIndex = planned.observations.filter((obs) => !alreadyIndexed(obs, stored.get(obs.id)));
+          const changed = toIndex.filter((obs) => stored.has(obs.id) && indexedContent(stored.get(obs.id)!) !== indexedContent(obs));
           const added = planned.observations.filter((obs) => !knownIds.has(obs.id)).length;
           sessionRow.observationCount = (sessionRow.observationCount || 0) + added;
           if (parsed.endedAt > (sessionRow.endedAt || "")) sessionRow.endedAt = parsed.endedAt;
@@ -502,7 +503,7 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
             const failure = results.find((result) => result.status === "rejected");
             if (failure) throw failure.reason;
           }
-          return { ...planned, sessionRow, added, toIndex };
+          return { ...planned, sessionRow, added, toIndex, changed };
         });
         if (!committed.success) return { ...committed, imported: sessionIds.length, sessionIds, observations: observationCount };
         const { sessionRow, observations: compressed } = committed;
@@ -517,6 +518,8 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
         // BM25 + vector in one path so jsonl-imported observations are
         // reachable by semantic search, not just keyword.
         try {
+          // A failed embed keeps the previous vector; drop it first so a stale one is retried, not kept.
+          for (const obs of committed.changed) getVectorIndex()?.remove(obs.id);
           await indexRecords(committed.toIndex, []);
         } catch (err) {
           logger.warn("Import indexing failed; restart rebuild will recover", {

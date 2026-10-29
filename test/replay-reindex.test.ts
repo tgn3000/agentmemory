@@ -102,4 +102,29 @@ describe("import-jsonl re-import indexing", () => {
     expect(embedded).toHaveLength(1);
     expect(embedded[0]).toContain("v2.yaml");
   });
+
+  it("does not keep a stale vector when re-embedding a changed observation fails", async () => {
+    const path = writeSession("reindex-fail", ["where is the cobalt config", "in deploy/cobalt.yaml"]);
+    const run = importer();
+    await run(path);
+    const before = new Set([...vectors.entries()].map(([id]) => id));
+    writeSession("reindex-fail", ["where is the cobalt config", "moved to deploy/cobalt/v2.yaml"]);
+    setEmbeddingProvider({
+      name: "down", dimensions: 2,
+      embed: async () => { throw new Error("provider down"); },
+      embedBatch: async () => { throw new Error("provider down"); },
+    });
+    await run(path);
+    const missing = [...before].filter((id) => !vectors.has(id));
+    expect(missing).toHaveLength(1);
+    setEmbeddingProvider({
+      name: "test", dimensions: 2,
+      embed: async (text: string) => { embedded.push(text); return new Float32Array([1, 0]); },
+      embedBatch: async (texts: string[]) => { embedded.push(...texts); return texts.map(() => new Float32Array([1, 0])); },
+    });
+    embedded = [];
+    await run(path);
+    expect(embedded).toEqual([expect.stringContaining("v2.yaml")]);
+    expect(vectors.has(missing[0])).toBe(true);
+  });
 });
