@@ -377,9 +377,18 @@ describe("compression recovery", () => {
 
   it.each([[undefined, 60_000], ["30000", 60_000], ["120000", 120_000], ["900000", 170_000], ["2m", 60_000]])(
     "bounds the compression deadline for AGENTMEMORY_LLM_TIMEOUT_MS=%s", (value, expected) => {
+      vi.stubEnv("OPENAI_TIMEOUT_MS", "");
       vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", value ?? "");
       expect(compressionTimeoutMs()).toBe(expected);
     });
+
+  it("lets OPENAI_TIMEOUT_MS take precedence, as it does for the OpenAI provider", () => {
+    vi.stubEnv("AGENTMEMORY_LLM_TIMEOUT_MS", "90000");
+    vi.stubEnv("OPENAI_TIMEOUT_MS", "120000");
+    expect(compressionTimeoutMs()).toBe(120_000);
+    vi.stubEnv("OPENAI_TIMEOUT_MS", "0");
+    expect(compressionTimeoutMs()).toBe(90_000);
+  });
 
   it("stops starting work after the batch budget while allowing its current attempt to finish", async () => {
     vi.useFakeTimers();

@@ -27,11 +27,15 @@ import { HARD_BUDGET_CAP_MS } from "../providers/_fetch.js";
 
 export const COMPRESSION_TIMEOUT_MS = 60_000;
 
-// The model call already honours AGENTMEMORY_LLM_TIMEOUT_MS; a fixed deadline here would cut a
-// slower (local) model off first. Never shorter than before, and under the iii invocation timeout.
+// The model call already honours the LLM timeout; a fixed deadline here would cut a slower (local)
+// model off first. Same precedence as the OpenAI provider; never shorter than before, and under
+// the iii invocation timeout.
 export function compressionTimeoutMs(): number {
-  const raw = getEnvVar("AGENTMEMORY_LLM_TIMEOUT_MS")?.trim();
-  const configured = raw && /^\d+$/.test(raw) ? Number(raw) : 0;
+  const ms = (key: string) => {
+    const raw = getEnvVar(key)?.trim();
+    return raw && /^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : undefined;
+  };
+  const configured = ms("OPENAI_TIMEOUT_MS") ?? ms("AGENTMEMORY_LLM_TIMEOUT_MS") ?? 0;
   return Math.min(Math.max(configured, COMPRESSION_TIMEOUT_MS), HARD_BUDGET_CAP_MS);
 }
 
