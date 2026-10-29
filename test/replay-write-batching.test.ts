@@ -9,7 +9,7 @@ import * as sessionLocks from "../src/state/keyed-mutex.js";
 vi.mock("../src/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock("../src/functions/search.js", () => ({ indexRecords: vi.fn() }));
+vi.mock("../src/functions/search.js", () => ({ indexRecords: vi.fn(), getSearchIndex: () => ({ has: () => false }), getVectorIndex: () => null }));
 
 describe("JSONL observation write batching", () => {
   it("limits writes to 20 and waits for the entire batch before starting the next", async () => {

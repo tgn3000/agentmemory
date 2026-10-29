@@ -22,7 +22,7 @@ import { resetLessonIndex } from "./lessons.js";
 import { projectTimeline, type Timeline } from "../replay/timeline.js";
 import { safeAudit } from "./audit.js";
 import { buildSyntheticCompression } from "./compress-synthetic.js";
-import { indexRecords } from "./search.js";
+import { getSearchIndex, getVectorIndex, indexRecords } from "./search.js";
 import { logger } from "../logger.js";
 import { rawFromObservationSource } from "./observation-source.js";
 import { budgetImportedObservationSources } from "./observation-source-budget.js";
@@ -306,6 +306,18 @@ async function findJsonlFiles(
   };
 }
 
+// What the search and vector indexes are built from (SearchIndex.extractTerms, the embedded title + narrative).
+function indexedContent(obs: CompressedObservation): string {
+  return JSON.stringify([obs.sessionId, obs.timestamp, obs.title, obs.subtitle ?? "", obs.narrative, obs.facts, obs.concepts, obs.files, obs.type]);
+}
+
+// Re-importing a file must not re-embed what is already indexed unchanged; missing or changed entries are still indexed.
+function alreadyIndexed(obs: CompressedObservation, prev: CompressedObservation | undefined): boolean {
+  if (!prev || indexedContent(prev) !== indexedContent(obs) || !getSearchIndex().has(obs.id)) return false;
+  const vectors = getVectorIndex();
+  return !vectors || vectors.has(obs.id);
+}
+
 export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
   sdk.registerFunction(
     "mem::replay::load",
@@ -475,6 +487,8 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
           };
           sessionRow.id ||= parsed.sessionId;
           const knownIds = new Set(existingRows.map((row) => row.id));
+          const stored = new Map(existingRows.map((row) => [row.id, row]));
+          const toIndex = planned.observations.filter((obs) => !alreadyIndexed(obs, stored.get(obs.id)));
           const added = planned.observations.filter((obs) => !knownIds.has(obs.id)).length;
           sessionRow.observationCount = (sessionRow.observationCount || 0) + added;
           if (parsed.endedAt > (sessionRow.endedAt || "")) sessionRow.endedAt = parsed.endedAt;
@@ -488,7 +502,7 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
             const failure = results.find((result) => result.status === "rejected");
             if (failure) throw failure.reason;
           }
-          return { ...planned, sessionRow, added };
+          return { ...planned, sessionRow, added, toIndex };
         });
         if (!committed.success) return { ...committed, imported: sessionIds.length, sessionIds, observations: observationCount };
         const { sessionRow, observations: compressed } = committed;
@@ -503,7 +517,7 @@ export function registerReplayFunctions(sdk: IIIClient, kv: StateKV): void {
         // BM25 + vector in one path so jsonl-imported observations are
         // reachable by semantic search, not just keyword.
         try {
-          await indexRecords(compressed, []);
+          await indexRecords(committed.toIndex, []);
         } catch (err) {
           logger.warn("Import indexing failed; restart rebuild will recover", {
             error: err instanceof Error ? err.message : String(err),
