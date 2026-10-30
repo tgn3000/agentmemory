@@ -9,7 +9,7 @@ const MAX_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 5000;
 // Absolute ceiling on the total budget, kept well under the iii 180s invocation
 // timeout so retries + sleeps + per-attempt timeouts can never overrun it.
-const HARD_BUDGET_CAP_MS = 170000;
+export const HARD_BUDGET_CAP_MS = 170000;
 // A retry only makes sense if there's room for at least a token attempt after
 // the sleep; without this floor we'd sleep, fire, and get instantly cut off.
 const MIN_ATTEMPT_FLOOR_MS = 100;
