@@ -193,6 +193,27 @@ describe("parseJsonlText metadata lines and re-import", () => {
     expect(new Set([...ids(a), ...ids(b)]).size).toBe(4);
   });
 
+  it("imports messages typed while the agent was working, not notices or agent messages", () => {
+    const queued = (uuid: string, text: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+      type: "attachment", uuid, sessionId: "s1", timestamp: "2026-10-30T01:00:00Z",
+      attachment: { type: "queued_command", prompt: [{ type: "text", text }], ...extra },
+    });
+    const out = parseJsonlText([
+      queued("q1", "skip the GPU tests", { commandMode: "prompt" }),
+      queued("q2", "use the release branch", { commandMode: "prompt", origin: { kind: "human" } }),
+      queued("q3", "keep the old schema"),
+      queued("n1", "<task-notification><task-id>b1</task-id>", { commandMode: "task-notification", origin: { kind: "task-notification" } }),
+      queued("p1", '<agent-message from="a1">final report', { commandMode: "prompt", origin: { kind: "peer", from: "a1" }, isMeta: true }),
+      queued("c1", "One more consistency edit", { origin: { kind: "coordinator" }, isMeta: true }),
+      JSON.stringify({ type: "attachment", uuid: "d1", sessionId: "s1", attachment: { type: "date", date: "x" } }),
+    ].join("\n"));
+    expect(out.observations.map((o) => [o.hookType, o.userPrompt])).toEqual([
+      ["prompt_submit", "skip the GPU tests"],
+      ["prompt_submit", "use the release branch"],
+      ["prompt_submit", "keep the old schema"],
+    ]);
+  });
+
   it("gives a timestampless entry the previous entry's time", () => {
     const out = parseJsonlText([
       JSON.stringify({ type: "user", sessionId: "s1", timestamp: "2026-10-09T09:12:38Z", message: { role: "user", content: "a" } }),
