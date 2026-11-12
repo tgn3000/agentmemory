@@ -4,7 +4,19 @@ The native provider adds automatic recall, conversation capture, and three memor
 
 ## Setup
 
-Start AgentMemory in a separate terminal, then connect the installed package to Hermes:
+The provider requires Hermes 0.21.6 or later. The manifest declares this with `requires_hermes`, so an older Hermes skips the plugin before import. If Hermes reports that requirement, update Hermes first.
+
+agentmemory is listed in the [Hermes plugin catalog](https://hermes-agent.nousresearch.com/marketplace/agentmemory). Start AgentMemory in a separate terminal, then install the reviewed catalog entry:
+
+```bash
+hermes plugins install agentmemory
+hermes memory setup
+hermes memory status
+```
+
+Hermes Desktop installs the same entry from `hermes://plugin/install?catalog=agentmemory`. The catalog pins the commit that Hermes reviewed, so it can lag the latest npm release.
+
+To install the provider and the bundled skills from your installed AgentMemory package instead, connect it to Hermes:
 
 ```bash
 agentmemory
@@ -50,6 +62,8 @@ Native `memory_save`, `memory_recall`, and `memory_search` default to the curren
 Remote plaintext HTTP emits a warning unless HTTPS is required. Redirects are refused. Authentication failures and unavailable servers return errors, never an empty successful recall result or a save into a fallback store.
 
 ## Lifecycle and limits
+
+The names below are Hermes memory provider methods, not plugin hooks. The provider registers no plugin hooks, so `plugin.yaml` declares `provides_hooks: []` and `hermes plugins doctor` reports no unknown hooks.
 
 - `system_prompt_block` supplies static tool guidance. Recalled content enters through `prefetch` with project and identity filters.
 - `on_turn_start` records the current author in context-local state.

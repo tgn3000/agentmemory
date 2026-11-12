@@ -10,8 +10,10 @@ import { III_PINNED_VERSION } from "../src/version.js";
 import {
   buildDiagnostics,
   canAutoFix,
+  doctorPromptsAllowed,
   DIAGNOSTIC_IDS,
   dryRunPlan,
+  failureReport,
   parseEnvFile,
   placeholderProviderKeys,
   realProviderKeys,
@@ -34,7 +36,7 @@ function stubCtx(overrides: Partial<DoctorContext> = {}): DoctorContext {
 function stubEffects(overrides: Partial<DoctorEffects> = {}): DoctorEffects {
   return {
     envFileExists: () => true,
-    readEnvFile: () => ({ ANTHROPIC_API_KEY: "sk-ant-real-key-value" }),
+    readEnvFile: () => ({ AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-real-key-value" }),
     processEnv: () => ({}),
     pidfileExists: () => false,
     pidfilePidIsAlive: () => null,
@@ -42,6 +44,7 @@ function stubEffects(overrides: Partial<DoctorEffects> = {}): DoctorEffects {
     localBinIiiPath: () => "/Users/test/.local/bin/iii",
     iiiBinaryVersion: () => III_PINNED_VERSION,
     externalEngineRunning: async () => false,
+    workerConnection: async () => "connected",
     viewerReachable: async () => true,
     runInit: async () => ({ ok: true, message: "wrote .env" }),
     openEditor: async () => ({ ok: true, message: "saved" }),
@@ -62,6 +65,7 @@ describe("doctor v2 diagnostic catalog", () => {
     expect(DIAGNOSTIC_IDS).toContain("stale-pidfile");
     expect(DIAGNOSTIC_IDS).toContain("env-placeholder-keys");
     expect(DIAGNOSTIC_IDS).toContain("iii-on-path-not-local-bin");
+    expect(DIAGNOSTIC_IDS).toContain("worker-not-connected");
   });
 
   it("every diagnostic has check, fix, message, and fixPreview", () => {
@@ -149,17 +153,20 @@ describe("doctor v2 diagnostic catalog", () => {
       const check = diagnostics.find((d) => d.id === "no-llm-provider-key")!;
       return check.check(stubCtx());
     };
-    expect(await statusFor({ OPENAI_API_KEY: "sk-real-openai-key" })).toEqual({
+    expect(await statusFor({ AGENTMEMORY_LLM_PROVIDER: "openai", OPENAI_API_KEY: "sk-real-openai-key" })).toEqual({
       ok: true,
       detail: "found: OPENAI_API_KEY",
     });
     expect(
       await statusFor({
+        AGENTMEMORY_LLM_PROVIDER: "anthropic", 
         ANTHROPIC_API_KEY: "sk-ant-real-key-value",
         OPENAI_API_KEY: "sk-real-openai-key",
-        OPENAI_API_KEY_FOR_LLM: "false",
       }),
     ).toEqual({ ok: true, detail: "found: ANTHROPIC_API_KEY" });
+    const keyOnly = await statusFor({ OPENAI_API_KEY: "sk-real-openai-key" });
+    expect(keyOnly.ok).toBe(false);
+    expect(keyOnly.detail).toContain("AGENTMEMORY_LLM_PROVIDER=openai");
   });
 
   describe("no-llm-provider-key with a process environment", () => {
@@ -175,20 +182,17 @@ describe("doctor v2 diagnostic catalog", () => {
     };
 
     it("lets the environment override the same key in the file, as the daemon does", async () => {
-      const reservedInFile = {
-        OPENAI_API_KEY: "sk-real-openai-key",
-        OPENAI_API_KEY_FOR_LLM: "false",
-      };
-      expect((await statusFor(reservedInFile, {})).ok).toBe(false);
-      expect((await statusFor(reservedInFile, { OPENAI_API_KEY_FOR_LLM: "true" })).ok).toBe(true);
+      const keyInFile = { OPENAI_API_KEY: "sk-real-openai-key" };
+      expect((await statusFor(keyInFile, {})).ok).toBe(false);
+      expect((await statusFor(keyInFile, { AGENTMEMORY_LLM_PROVIDER: "openai" })).ok).toBe(true);
       expect(
-        (await statusFor({ ANTHROPIC_API_KEY: "sk-ant-real-key-value" }, { ANTHROPIC_API_KEY: "" }))
+        (await statusFor({ AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-real-key-value" }, { ANTHROPIC_API_KEY: "" }))
           .ok,
       ).toBe(false);
     });
 
     it("names a key that only the environment provides, and says a daemon elsewhere misses it", async () => {
-      expect(await statusFor({}, { ANTHROPIC_API_KEY: "sk-ant-real-key-value" })).toEqual({
+      expect(await statusFor({}, { AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-real-key-value" })).toEqual({
         ok: true,
         detail:
           "found: ANTHROPIC_API_KEY (environment); a daemon started elsewhere will not see it",
@@ -198,7 +202,7 @@ describe("doctor v2 diagnostic catalog", () => {
     it("marks a key the environment overrides, not just one the file lacks", async () => {
       expect(
         await statusFor(
-          { ANTHROPIC_API_KEY: "sk-ant-key-from-file" },
+          { AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-key-from-file" },
           { ANTHROPIC_API_KEY: "sk-ant-key-from-shell" },
         ),
       ).toEqual({
@@ -210,8 +214,8 @@ describe("doctor v2 diagnostic catalog", () => {
 
     it("leaves a file key unmarked when only an unrelated flag comes from the environment", async () => {
       const status = await statusFor(
-        { OPENAI_API_KEY: "sk-real-openai-key", OPENAI_API_KEY_FOR_LLM: "false" },
-        { OPENAI_API_KEY_FOR_LLM: "true" },
+        { AGENTMEMORY_LLM_PROVIDER: "openai", OPENAI_API_KEY: "sk-real-openai-key" },
+        { AGENTMEMORY_CAPTURE_SPOOL: "true" },
       );
       expect(status.ok).toBe(true);
       expect(status.detail).toBe("found: OPENAI_API_KEY");
@@ -219,7 +223,7 @@ describe("doctor v2 diagnostic catalog", () => {
 
     it("ignores an undefined environment value instead of blanking the file key", async () => {
       expect(
-        await statusFor({ ANTHROPIC_API_KEY: "sk-ant-real-key-value" }, {
+        await statusFor({ AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-real-key-value" }, {
           ANTHROPIC_API_KEY: undefined,
         }),
       ).toEqual({ ok: true, detail: "found: ANTHROPIC_API_KEY" });
@@ -230,7 +234,7 @@ describe("doctor v2 diagnostic catalog", () => {
         stubEffects({
           envFileExists: () => false,
           readEnvFile: () => ({}),
-          processEnv: () => ({ ANTHROPIC_API_KEY: "sk-ant-real-key-value" }),
+          processEnv: () => ({ AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-real-key-value" }),
         }),
       );
       const check = diagnostics.find((d) => d.id === "no-llm-provider-key")!;
@@ -253,7 +257,7 @@ describe("doctor v2 diagnostic catalog", () => {
       const status = await check.check(stubCtx());
       expect(status.ok).toBe(false);
       expect(status.detail).toContain("env-missing");
-      expect(await statusFor({}, {})).toEqual({ ok: false, detail: "no provider key set" });
+      expect(await statusFor({}, {})).toEqual({ ok: false, detail: "no provider chosen" });
     });
 
     it("keeps the agent-sdk label when the only key is reserved for embeddings", async () => {
@@ -265,15 +269,30 @@ describe("doctor v2 diagnostic catalog", () => {
       ).toEqual({ ok: true, detail: "agent-sdk fallback, no API key" });
     });
 
-    it("treats a placeholder exported in the environment as missing, unlike the daemon", async () => {
+    it("treats a placeholder exported in the environment as missing, like the daemon", async () => {
       expect(
         (
           await statusFor(
-            { ANTHROPIC_API_KEY: "sk-ant-real-key-value" },
+            { AGENTMEMORY_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-real-key-value" },
             { ANTHROPIC_API_KEY: "your-key-here" },
           )
         ).ok,
       ).toBe(false);
+    });
+
+    it("names a placeholder OpenAI key behind a plain-http base URL, like the daemon", async () => {
+      expect(
+        await statusFor(
+          { AGENTMEMORY_LLM_PROVIDER: "openai", OPENAI_API_KEY: "xxx" },
+          { OPENAI_BASE_URL: "http://localhost:11434/v1" },
+        ),
+      ).toEqual({ ok: true, detail: "found: OPENAI_API_KEY" });
+      expect(
+        await statusFor(
+          { AGENTMEMORY_LLM_PROVIDER: "openai", OPENAI_API_KEY: "xxx", OPENAI_BASE_URL: "http://localhost:11434/v1" },
+          {},
+        ),
+      ).toEqual({ ok: true, detail: "found: OPENAI_API_KEY" });
     });
   });
 
@@ -467,6 +486,107 @@ describe("doctor v2 diagnostic catalog", () => {
     expect(lines[0]).toContain("All checks passing");
   });
 
+  it("worker-not-connected fails when the engine runs without the agentmemory worker", async () => {
+    const diagnostics = buildDiagnostics(stubEffects({ workerConnection: async () => "engine-only" }));
+    const check = diagnostics.find((d) => d.id === "worker-not-connected")!;
+    const status = await check.check(stubCtx());
+    expect(status.ok).toBe(false);
+    expect(status.detail).toContain("http://localhost:3111");
+    expect(canAutoFix(check, status)).toBe(false);
+    expect(check.fixPreview).toContain("npx -y @agentmemory/agentmemory@latest");
+    expect(check.moreInfo).toContain("Docker");
+  });
+
+  it("worker-not-connected keeps the selected port in the recovery command", async () => {
+    const diagnostics = buildDiagnostics(stubEffects({ workerConnection: async () => "engine-only" }));
+    const check = diagnostics.find((d) => d.id === "worker-not-connected")!;
+    const startCommand = "npx -y @agentmemory/agentmemory@latest --port 4111";
+    const status = await check.check({ ...stubCtx(), baseUrl: "http://localhost:4111", startCommand });
+    expect(status.manualFix).toContain(`start agentmemory with: ${startCommand}.`);
+    expect(failureReport(check, status).fix).toContain("--port 4111");
+  });
+
+  it("worker-not-connected points a managed Compose engine at the Compose failure report", async () => {
+    const diagnostics = buildDiagnostics(stubEffects({ workerConnection: async () => "managed-worker-down" }));
+    const check = diagnostics.find((d) => d.id === "worker-not-connected")!;
+    const status = await check.check(stubCtx());
+    expect(status.ok).toBe(false);
+    expect(status.detail).toContain("managed Worker Compose");
+    expect(status.manualFix).toContain("agentmemory status");
+    expect(status.manualFix).not.toContain("Stop the process");
+  });
+
+  it("worker-not-connected keeps the selected instance in the managed Compose recovery commands", async () => {
+    const diagnostics = buildDiagnostics(stubEffects({ workerConnection: async () => "managed-worker-down" }));
+    const check = diagnostics.find((d) => d.id === "worker-not-connected")!;
+    const status = await check.check({ ...stubCtx(), targetArgs: " --instance 1", startCommand: "npx -y @agentmemory/agentmemory@latest --instance 1" });
+    expect(status.manualFix).toContain("agentmemory status --instance 1 ");
+    expect(status.manualFix).toContain("agentmemory stop --instance 1 ");
+    expect(status.manualFix).toContain("start again with: npx -y @agentmemory/agentmemory@latest --instance 1.");
+  });
+
+  it("worker-not-connected does not call an unrecognized service an engine", async () => {
+    const diagnostics = buildDiagnostics(stubEffects({ workerConnection: async () => "unrecognized" }));
+    const check = diagnostics.find((d) => d.id === "worker-not-connected")!;
+    const status = await check.check(stubCtx());
+    expect(status.ok).toBe(false);
+    expect(status.detail).toContain("iii engine port does not answer");
+    expect(status.manualFix).toContain("AGENTMEMORY_URL");
+    expect(status.manualFix).not.toContain("Stop the process");
+    const report = failureReport(check, status);
+    expect(report.problem).not.toContain("iii engine is running");
+    expect(report.fix).toContain("legacy CLI Docker mode");
+  });
+
+  it("worker-not-connected passes when the worker answers or the server is down", async () => {
+    for (const connection of ["connected", "unreachable"] as const) {
+      const diagnostics = buildDiagnostics(stubEffects({ workerConnection: async () => connection }));
+      const check = diagnostics.find((d) => d.id === "worker-not-connected")!;
+      expect((await check.check(stubCtx())).ok).toBe(true);
+    }
+  });
+
+  it("iii-on-path-not-local-bin explains which iii is used and how to fix it", async () => {
+    const privatePath = "/Users/test/.agentmemory/bin/iii";
+    const diagnostics = buildDiagnostics(stubEffects({
+      findIiiBinary: () => "/opt/homebrew/bin/iii",
+      localBinIiiPath: () => privatePath,
+      iiiBinaryVersion: (bin) => (bin === privatePath ? null : "0.99.99"),
+    }));
+    const check = diagnostics.find((d) => d.id === "iii-on-path-not-local-bin")!;
+    const status = await check.check(stubCtx());
+    expect(status.detail).toContain("/opt/homebrew/bin/iii");
+    expect(status.detail).toContain("0.99.99");
+    expect(check.message).toContain("PATH");
+    expect(check.message).toContain("~/.agentmemory/bin/iii");
+    const report = failureReport(check, status);
+    expect(report.problem).toContain(check.message);
+    expect(report.fix).toContain("manual fix:");
+    expect(report.fix).toContain("npx -y @agentmemory/agentmemory@latest");
+  });
+
+  it("iii-on-path-not-local-bin says no action is needed when the PATH iii is the pinned version", async () => {
+    const privatePath = "/Users/test/.agentmemory/bin/iii";
+    const diagnostics = buildDiagnostics(stubEffects({
+      findIiiBinary: () => "/opt/homebrew/bin/iii",
+      localBinIiiPath: () => privatePath,
+      iiiBinaryVersion: (bin) => (bin === privatePath ? null : III_PINNED_VERSION),
+    }));
+    const check = diagnostics.find((d) => d.id === "iii-on-path-not-local-bin")!;
+    const status = await check.check(stubCtx());
+    expect(status.ok).toBe(false);
+    expect(status.manualFix).toContain("no action is needed");
+    expect(failureReport(check, status).fix).toContain("upgrade");
+  });
+
+  it("failureReport gives every failing diagnostic its message and a fix hint", () => {
+    for (const diagnostic of buildDiagnostics(stubEffects())) {
+      const report = failureReport(diagnostic, { ok: false, detail: "stub fail" });
+      expect(report.problem).toBe(`${diagnostic.id} ✗ ${diagnostic.message} (stub fail)`);
+      expect(report.fix).toMatch(/^(manual fix|fix): \S/);
+    }
+  });
+
   it("dryRunPlan labels manual-only diagnostics without promising automatic fixes", () => {
     const diagnostic = buildDiagnostics(stubEffects())
       .find((d) => d.id === "iii-on-path-not-local-bin")!;
@@ -506,5 +626,15 @@ describe("realProviderKeys / placeholderProviderKeys", () => {
     expect(placeholderProviderKeys({ ANTHROPIC_API_KEY: "xxxx-xxxx" })).toEqual([
       "ANTHROPIC_API_KEY",
     ]);
+  });
+});
+
+describe("doctor prompts", () => {
+  it("prompts only in an interactive terminal without CI", () => {
+    expect(doctorPromptsAllowed({}, true, true)).toBe(true);
+    expect(doctorPromptsAllowed({ CI: "1" }, true, true)).toBe(false);
+    expect(doctorPromptsAllowed({}, false, true)).toBe(false);
+    expect(doctorPromptsAllowed({}, true, false)).toBe(false);
+    expect(doctorPromptsAllowed({}, undefined, undefined)).toBe(false);
   });
 });
